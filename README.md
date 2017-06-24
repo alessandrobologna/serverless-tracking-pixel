@@ -35,3 +35,4 @@ The simplest way to use this tracking pixel is to embed it in a shared component
 ```html
 <img src="https://<api-gw-url>/dev/track.gif" style="display:none">
 ```
+Please note that if you are serving the pixel straight from the API gateway, you will not be able to also read cookies that are associated with your domain. If you need to do so, the simplest thing is to do that as a page rule on your CDN, using the API gateway as origin for requests matching `*/track.gif`.
