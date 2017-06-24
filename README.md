@@ -24,7 +24,8 @@ A simple one line to deploy then is:
 $ PROJECT=myproject STAGE=dev sls deploy
 ```
 Once deployed, note the api gateway url provided, and you can test with a simple curl command:
-```curl -v "https://<api-gw-url>/dev/track.gif?foo=1&bar=2" -H "Cookie: some-cookie=1234" -H "Referer: http://www.google.com"
+```bash
+$ curl -v "https://<api-gw-url>/dev/track.gif?foo=1&bar=2" -H "Cookie: some-cookie=1234" -H "Referer: http://www.google.com"
 ```
 where <api-gw-url> is the provided api gateway url.
 
