@@ -1,10 +1,10 @@
-# serverless-tracking-pixel
+## Serverless Tracking Pixel
 experimental tracking pixel implementation using serverless
 
 ## What does it do
 
-This project implements a lambda/api gateway microservice that serving a 1x1 transparent gif, while capturing request context information, pushing them to Kinesis Firehose and from there to a ElasticSearch Service cluster.
-All the resources required are built using serverless and the built in CloudFormation support. Please note that the ElasticSearch cluster is built, by default, with no permissions to access it. You may want to add permissions in the CloudFormation template or, once it's built, in the AWS console.
+This project implements a Lambda/APIGateway microservice that is serving a 1x1 transparent gif, while capturing the request context information, pushing them to Kinesis Firehose and from there to a ElasticSearch Service cluster.
+All the resources required are built using the [Serverless Framework](https://serverless.com/) and the built-in CloudFormation support. Please note that the ElasticSearch cluster is built, by default, with no permissions to access it. You may want to add permissions in the CloudFormation template or, once it's built, in the AWS console.
  
 ### Requirements:
 
@@ -23,11 +23,11 @@ A simple one line to deploy then is:
 ```bash
 $ PROJECT=myproject STAGE=dev sls deploy
 ```
-Once deployed, note the api gateway url provided, and you can test with a simple curl command:
+Once deployed, note the APIGateway url provided, and test the service with a simple curl command:
 ```bash
 $ curl -v "https://<api-gw-url>/dev/track.gif?foo=1&bar=2" -H "Cookie: some-cookie=1234" -H "Referer: http://www.google.com"
 ```
-where <api-gw-url> is the provided api gateway url.
+where <api-gw-url> is the provided APIGateway url.
 
 ### Using it on your website.
 The simplest way to use this tracking pixel is to embed it in a shared component of your site (for instance, the footer), with something like:
