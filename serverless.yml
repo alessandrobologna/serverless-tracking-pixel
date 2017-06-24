@@ -1,0 +1,132 @@
+service: serverless-tracking-pixel
+      
+provider:
+  name: aws
+  runtime: nodejs6.10
+  stage: dev
+  region: us-east-1
+
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "firehose:PutRecord"
+      Resource: "*"
+
+  environment:
+    firehose: value2
+
+plugins:
+ - serverless-apigw-binary
+
+custom:
+  name: web-tracking
+  apigwBinary:
+    types:          
+      - '*/*'
+
+functions:
+  tracker:
+    handler: handler.tracker
+    environment:
+      STREAM_NAME: "${env:PROJECT}-${env:STAGE}-${self:custom.name}"
+    events:
+      - http:
+          path: track.gif
+          method: get
+          response:
+
+resources:
+  Outputs:
+    DeliveryStream:
+      Description: The FireHose Delivery Stream.
+      Value: 
+        Ref: 'DeliveryStream'
+    SearchClusterArn:
+      Description: The ElasticSearch Service cluster ARN.
+      Value: 
+        Fn::GetAtt: ['SearchCluster','DomainArn']
+    SearchClusterEndpoint:
+      Description: The ElasticSearch Service cluster endpoint.
+      Value: 
+        Fn::GetAtt: ['SearchCluster','DomainEndpoint']
+
+  Resources:
+    SearchCluster:
+      Type: "AWS::Elasticsearch::Domain"
+      Properties:
+        DomainName: "${env:PROJECT}-${env:STAGE}-${self:custom.name}"
+        ElasticsearchVersion: 5.3
+        ElasticsearchClusterConfig: 
+          DedicatedMasterEnabled: "true"
+          InstanceCount: "2"
+          ZoneAwarenessEnabled: "true"
+          InstanceType: "m3.medium.elasticsearch"
+          DedicatedMasterType: "m3.medium.elasticsearch"
+          DedicatedMasterCount: "3"
+        EBSOptions: 
+          EBSEnabled: true
+          Iops: 0
+          VolumeSize: 20
+          VolumeType: "gp2"
+        SnapshotOptions: 
+          AutomatedSnapshotStartHour: "0"
+        AdvancedOptions: 
+          rest.action.multi.allow_explicit_index: "true"
+
+    FirehoseBackupBucket:
+      Type: "AWS::S3::Bucket"
+      Properties: 
+        BucketName: "com.${env:PROJECT}.${env:STAGE}.${self:custom.name}"
+
+    DeliveryStreamRole:
+      Type: "AWS::IAM::Role"
+      Properties: 
+        RoleName: "${env:PROJECT}-${env:STAGE}-${self:custom.name}"
+        AssumeRolePolicyDocument: 
+          Version: "2012-10-17"
+          Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+                Service: 
+                    - "firehose.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+        ManagedPolicyArns:
+          - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+          - "arn:aws:iam::aws:policy/AmazonESFullAccess" 
+          - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+
+    DeliveryStream:
+        Type: "AWS::KinesisFirehose::DeliveryStream"
+        DependsOn: SearchCluster
+        Properties:
+          DeliveryStreamName: "${env:PROJECT}-${env:STAGE}-${self:custom.name}"
+          ElasticsearchDestinationConfiguration:
+            BufferingHints:
+              IntervalInSeconds: 60
+              SizeInMBs: 5
+            CloudWatchLoggingOptions: 
+              Enabled: true
+              LogGroupName: "/${env:PROJECT}/${env:STAGE}/${self:custom.name}"
+              LogStreamName: "firehose"
+            DomainARN: 
+              Fn::GetAtt:  [SearchCluster,DomainArn]
+            IndexName: ${self:custom.name}
+            IndexRotationPeriod: "OneDay"
+            RetryOptions:
+              DurationInSeconds: 60
+            TypeName: "tracker"
+            RoleARN: 
+              Fn::GetAtt: [DeliveryStreamRole, Arn]  
+            S3BackupMode: "AllDocuments"
+            S3Configuration:
+              BucketARN: 
+                Fn::GetAtt: [FirehoseBackupBucket, Arn]
+              RoleARN: 
+                Fn::GetAtt: [DeliveryStreamRole, Arn]  
+              BufferingHints:
+                  IntervalInSeconds: 300
+                  SizeInMBs: 25
+              CompressionFormat: "UNCOMPRESSED"
+              Prefix: "tracking/"              
