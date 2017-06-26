@@ -45,18 +45,23 @@ module.exports.tracker = (event, context, callback) => {
 			)
 
 	}
-	// optional processing of tracking cookie
-	if (process.env.COOKIE_NAME && process.env.SIGNATURE) {
-		var promise = kms.decrypt({
-  			CiphertextBlob: Buffer(process.env.SIGNATURE, 'base64')
-		}).promise();
-	} else {
-		var promise = Promise.resolve({});
+	
+	function maybeDecrypt() {
+		if (process.env.COOKIE_NAME && process.env.SIGNATURE) {
+			return  kms.decrypt({
+  				CiphertextBlob: Buffer(process.env.SIGNATURE, 'base64')
+			}).promise() 
+		} else {
+			return Promise.resolve(); 
+		}
 	}
+
+	// optional processing of tracking cookie
+	var promise = maybeDecrypt(); 
 	
 	promise.then(res => {
 		console.info("Res", res)
-		if (res.Plaintext) {
+		if (res && res.Plaintext) {
 			const secret = String(res.Plaintext)
 			let tracking = requestData.cookies[process.env.COOKIE_NAME];
 			let splitted = tracking ? tracking.split('/') : undefined;
