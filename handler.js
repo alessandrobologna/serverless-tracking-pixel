@@ -1,13 +1,23 @@
 'use strict';
 
-
-
-var AWS = require('aws-sdk');
+const AWS = require('aws-sdk');
+const uuidv4 = require('uuid/v4');
+const crypto = require('crypto');
 const fh = new AWS.Firehose();
+const kms = new AWS.KMS();
 
 module.exports.tracker = (event, context, callback) => {
-	console.log(event);
-	let data = {
+	console.info("Event", event);
+	let response = {
+		statusCode: 200,
+		headers: {
+			'Content-Type': 'image/gif',
+			'Cache-Control' : 'no-cache'
+		},
+		body: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+		isBase64Encoded: true
+	};
+	let requestData = {
 		ip: event.requestContext.identity.sourceIp,
 		path: event.requestContext.path,
 		referer: event.headers['Referer'],
@@ -17,45 +27,70 @@ module.exports.tracker = (event, context, callback) => {
 		encoding: event.headers['Accept-Encoding'],
 		country: event.headers['CloudFront-Viewer-Country'],
 		params: event.queryStringParameters,
+		cookies: {}
 	};
 	if (event.headers['CloudFront-Is-Desktop-Viewer']) {
-		data['device'] = 'desktop'
+		requestData['device'] = 'desktop'
 	} else if (event.headers['CloudFront-Is-Mobile-Viewer']) {
-		data['device'] = 'mobile'
+		requestData['device'] = 'mobile'
 	} else {
-		data['device'] = 'other'
+		requestData['device'] = 'other'
 	}
 	// split cookie header
 	if (event.headers['Cookie']) {
-		data.cookies = event.headers['Cookie'].split(';').map((x) => {
+		requestData.cookies = event.headers['Cookie'].split(';').map((x) => {
 			return x.trim().split(/(=)/);
 		}).reduce(
 			(a, b) => { a[b[0]] = b.slice(2).join('').replace(/^"(.*)"$/, '$1'); return a; }, {}
 			)
 
 	}
-	data['@timestamp'] = new Date().toISOString();
-	var jsonDoc = JSON.stringify(data);
-	console.log(data);
-	const response = {
-		statusCode: 200,
-		headers: {
-			'Content-Type': 'image/gif',
-			'Cache-Control' : 'no-cache'
-		},
-		body: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
-		isBase64Encoded: true
-	};
-
-	fh.putRecord({
-		DeliveryStreamName: process.env.STREAM_NAME,
-		Record: { Data: jsonDoc }
-	}).promise().then(data => {
-		console.log(data);
-		if (data.RecordId) {
-			response.headers['RecordId'] = data.RecordId;
+	// optional processing of tracking cookie
+	if (process.env.COOKIE_NAME && process.env.SIGNATURE) {
+		var promise = kms.decrypt({
+  			CiphertextBlob: Buffer(process.env.SIGNATURE, 'base64')
+		}).promise();
+	} else {
+		var promise = Promise.resolve({});
+	}
+	
+	promise.then(res => {
+		console.info("Res", res)
+		if (res.Plaintext) {
+			const secret = String(res.Plaintext)
+			let tracking = requestData.cookies[process.env.COOKIE_NAME];
+			let splitted = tracking ? tracking.split('/') : undefined;
+			// function to determine if the cookie exists and is valid
+			function verify(segments, secret) {
+				return segments.length === 2 && (crypto.createHmac('sha256', secret).update(segments[0]).digest('hex')===segments[1]); 
+			}	
+			// verify the cookie
+			if (!(splitted && verify(splitted,secret))) {
+				// add a tracking cookie
+				let uuid  = uuidv4();
+				let sign = crypto.createHmac('sha256', secret).update(uuid).digest('hex');
+				response.headers['Set-Cookie']=process.env.COOKIE_NAME + "=" + uuid + "/" + sign +"; path=/; HttpOnly; Secure; Max-Age=31536000";
+				requestData['uuid'] = uuid;
+			} else {
+				requestData['uuid'] = splitted[0];
+			}
+			delete requestData.cookies[process.env.COOKIE_NAME];
 		}
 	}).catch(error => {
-		console.log(error);
-	}).then(() => callback(null, response));
+		console.error("KMS error", error);
+	}).then(() => {
+		requestData['@timestamp'] = new Date().toISOString();
+		console.info("Firehose data", requestData);
+		fh.putRecord({
+			DeliveryStreamName: process.env.STREAM_NAME,
+			Record: { Data: JSON.stringify(requestData) }
+		}).promise().then(data => {
+			console.info("Firehose response", data);
+			if (data.RecordId) {
+				response.headers['RecordId'] = data.RecordId;
+			}
+		}).catch(error => {
+			console.error("Firehose error", error);
+		}).then(() => callback(null, response));
+	})
 };

@@ -1,19 +1,19 @@
-service: serverless-tracking-pixel
+service: 
+  name: serverless-tracking-pixel
+  awsKmsKeyArn: arn:aws:kms:us-east-1:761145510729:key/f0b6d7cd-16f9-4937-9422-425f85d409cb
       
 provider:
   name: aws
   runtime: nodejs6.10
   stage: dev
   region: us-east-1
+  variableSyntax: "\\${{([\\s\\S]+?)}}" 
 
   iamRoleStatements:
     - Effect: "Allow"
       Action:
         - "firehose:PutRecord"
       Resource: "*"
-
-  environment:
-    firehose: value2
 
 plugins:
  - serverless-apigw-binary
@@ -28,7 +28,9 @@ functions:
   tracker:
     handler: handler.tracker
     environment:
-      STREAM_NAME: "${env:PROJECT}-${env:STAGE}-${self:custom.name}"
+      STREAM_NAME: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
+      COOKIE_NAME: "${{env:COOKIE_NAME}}"
+      SIGNATURE: "${{env:SIGNATURE}}"
     events:
       - http:
           path: track.gif
@@ -36,6 +38,7 @@ functions:
           response:
 
 resources:
+  Description: Tracking pixel CF template, creating ES, Firehose and KMS
   Outputs:
     DeliveryStream:
       Description: The FireHose Delivery Stream.
@@ -49,12 +52,39 @@ resources:
       Description: The ElasticSearch Service cluster endpoint.
       Value: 
         Fn::GetAtt: ['SearchCluster','DomainEndpoint']
+    KMSArns:
+      Description: The KMS Service ARN.
+      Value: 
+        Fn::GetAtt: ['SearchCluster','DomainEndpoint']
 
   Resources:
+    EncryptionKey: 
+      Type: "AWS::KMS::Key"
+      Properties: 
+        Description: "Encryptoin key for ${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
+        KeyPolicy: 
+          Version: "2012-10-17"
+          Id: "key-default-1"
+          Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: 
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: kms:*
+            Resource: '*'
+
+    EncryptionKeyAlias:
+      Type: AWS::KMS::Alias
+      Properties:
+        AliasName: alias/${{env:PROJECT}}-${{env:STAGE}}/${{self:custom.name}}
+        TargetKeyId:
+          Ref: EncryptionKey
+
     SearchCluster:
       Type: "AWS::Elasticsearch::Domain"
       Properties:
-        DomainName: "${env:PROJECT}-${env:STAGE}-${self:custom.name}"
+        DomainName: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
         ElasticsearchVersion: 5.3
         ElasticsearchClusterConfig: 
           DedicatedMasterEnabled: "true"
@@ -76,12 +106,31 @@ resources:
     FirehoseBackupBucket:
       Type: "AWS::S3::Bucket"
       Properties: 
-        BucketName: "com.${env:PROJECT}.${env:STAGE}.${self:custom.name}"
+        BucketName: "com.${{env:PROJECT}}.${{env:STAGE}}.${{self:custom.name}}"
+
+    LogGroup:
+      Type: "AWS::Logs::LogGroup"
+      Properties: 
+        LogGroupName: "/${{env:PROJECT}}/${{env:STAGE}}/${{self:custom.name}}"
+
+    S3LogStream:
+      Type: "AWS::Logs::LogStream"
+      Properties: 
+        LogGroupName: 
+          Ref: LogGroup
+        LogStreamName: s3
+
+    ESLogStream:
+      Type: "AWS::Logs::LogStream"
+      Properties: 
+        LogGroupName: 
+          Ref: LogGroup
+        LogStreamName: es
 
     DeliveryStreamRole:
       Type: "AWS::IAM::Role"
       Properties: 
-        RoleName: "${env:PROJECT}-${env:STAGE}-${self:custom.name}"
+        RoleName: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
         AssumeRolePolicyDocument: 
           Version: "2012-10-17"
           Statement: 
@@ -95,24 +144,25 @@ resources:
         ManagedPolicyArns:
           - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
           - "arn:aws:iam::aws:policy/AmazonESFullAccess" 
-          - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+          - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess" 
 
     DeliveryStream:
         Type: "AWS::KinesisFirehose::DeliveryStream"
         DependsOn: SearchCluster
         Properties:
-          DeliveryStreamName: "${env:PROJECT}-${env:STAGE}-${self:custom.name}"
+          DeliveryStreamName: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
           ElasticsearchDestinationConfiguration:
+            CloudWatchLoggingOptions:
+              Enabled: true
+              LogGroupName: 
+                Ref: LogGroup
+              LogStreamName: "es"
             BufferingHints:
               IntervalInSeconds: 60
               SizeInMBs: 5
-            CloudWatchLoggingOptions: 
-              Enabled: true
-              LogGroupName: "/${env:PROJECT}/${env:STAGE}/${self:custom.name}"
-              LogStreamName: "firehose"
             DomainARN: 
               Fn::GetAtt:  [SearchCluster,DomainArn]
-            IndexName: ${self:custom.name}
+            IndexName: ${{self:custom.name}}
             IndexRotationPeriod: "OneDay"
             RetryOptions:
               DurationInSeconds: 60
@@ -125,6 +175,11 @@ resources:
                 Fn::GetAtt: [FirehoseBackupBucket, Arn]
               RoleARN: 
                 Fn::GetAtt: [DeliveryStreamRole, Arn]  
+              CloudWatchLoggingOptions: 
+                Enabled: true
+                LogGroupName: 
+                  Ref: LogGroup
+                LogStreamName: "s3"
               BufferingHints:
                   IntervalInSeconds: 300
                   SizeInMBs: 25

@@ -21,9 +21,9 @@ Deploying the project requires two environment variables to be defined, to provi
 A simple one line to deploy then is:
 
 ```bash
-$ PROJECT=myproject STAGE=dev sls deploy
+$ PROJECT=myproject STAGE=dev sls deploy 
 ```
-Once deployed, note the APIGateway url provided, and test the service with a simple curl command:
+Once deployed, note the APIGateway url provided, to test the service with a simple curl command:
 ```bash
 $ curl -v "https://<api-gw-url>/dev/track.gif?foo=1&bar=2" -H "Cookie: some-cookie=1234" -H "Referer: http://www.google.com"
 ```
@@ -36,3 +36,15 @@ The simplest way to use this tracking pixel is to embed it in a shared component
 <img src="https://<api-gw-url>/dev/track.gif" style="display:none">
 ```
 Please note that if you are serving the pixel straight from the API gateway, you will not be able to also read cookies that are associated with your domain. If you need to do so, the simplest thing is to do that as a page rule on your CDN, using the API gateway as origin for requests matching `*/track.gif`.
+
+### Adding a tracking UUID cookie
+You can also let this service generate a tracking cookie, signed with a secret (to avoid tampering). The secret is encrypted using KMS, and passed as an encrypted environment variable. When you deploy this project, the CloudFormation template will generate a KMS master key and an **alias** for it named `alias/<PROJECT>-<STAGE>/web-tracking`. You can use this master key to encrypt a secret with this command line (which requires the aws cli [installed](http://docs.aws.amazon.com/cli/latest/userguide/installing.html)).
+```bash
+$ export SIGNATURE=$(aws kms encrypt --key-id <alias> --plaintext 'my secret key' --query 'CiphertextBlob' --output text)
+```
+where `<alias>` is the alias as describe above.
+The next step is to define how you would wish your cookie to be named:
+```bash
+$ export COOKIE_NAME=myTrackingCookie
+```
+Run the deploy command again, and now every request that doesn't have a `myTrackingCookie` cookie will be responded with a `Set-Cookie` header, with `myTrackingCookie` set to a random uuid, a `/` separator, and an `HMAC` of the uuid based on the provided `SIGNATURE`.
