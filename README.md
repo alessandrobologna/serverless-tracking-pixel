@@ -3,6 +3,7 @@ experimental tracking pixel implementation using serverless
 
 ## What does it do
 
+![diagram](art/diagram.png)
 This project implements a Lambda/APIGateway microservice that is serving a 1x1 transparent gif, while capturing the request context information, pushing them to Kinesis Firehose and from there to a ElasticSearch Service cluster.
 All the resources required are built using the [Serverless Framework](https://serverless.com/) and the built-in CloudFormation support. Please note that the ElasticSearch cluster is built, by default, with no permissions to access it. You may want to add permissions in the CloudFormation template or, once it's built, in the AWS console.
  
