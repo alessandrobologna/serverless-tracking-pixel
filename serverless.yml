@@ -1,6 +1,5 @@
 service: 
   name: serverless-tracking-pixel
-  awsKmsKeyArn: arn:aws:kms:us-east-1:761145510729:key/f0b6d7cd-16f9-4937-9422-425f85d409cb
       
 provider:
   name: aws
@@ -17,7 +16,7 @@ provider:
 
 plugins:
  - serverless-apigw-binary
-
+ 
 custom:
   name: web-tracking
   apigwBinary:
@@ -61,7 +60,7 @@ resources:
     EncryptionKey: 
       Type: "AWS::KMS::Key"
       Properties: 
-        Description: "Encryptoin key for ${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
+        Description: "Encryption key for ${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
         KeyPolicy: 
           Version: "2012-10-17"
           Id: "key-default-1"
@@ -87,12 +86,12 @@ resources:
         DomainName: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
         ElasticsearchVersion: 5.3
         ElasticsearchClusterConfig: 
-          DedicatedMasterEnabled: "true"
           InstanceCount: "2"
           ZoneAwarenessEnabled: "true"
-          InstanceType: "m3.medium.elasticsearch"
-          DedicatedMasterType: "m3.medium.elasticsearch"
-          DedicatedMasterCount: "3"
+          InstanceType: "t2.small.elasticsearch"
+#          DedicatedMasterEnabled: "true"
+#          DedicatedMasterType: "t2.small.elasticsearch"
+#          DedicatedMasterCount: "3"
         EBSOptions: 
           EBSEnabled: true
           Iops: 0
