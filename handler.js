@@ -6,13 +6,29 @@ const crypto = require('crypto');
 const fh = new AWS.Firehose();
 const kms = new AWS.KMS();
 
+// function to determine if the cookie exists and is valid
+const verify = (segments, secret) => {
+	return segments.length === 2 && (crypto.createHmac('sha256', secret).update(segments[0]).digest('hex') === segments[1]);
+}
+
+const maybeDecrypt = () => {
+	if (process.env.COOKIE_NAME && process.env.SIGNATURE) {
+		return kms.decrypt({
+			CiphertextBlob: new Buffer(process.env.SIGNATURE, 'base64')
+		}).promise()
+	} else {
+		return Promise.resolve();
+	}
+}
+
+
 module.exports.tracker = (event, context, callback) => {
 	console.info("Event", event);
 	let response = {
 		statusCode: 200,
 		headers: {
 			'Content-Type': 'image/gif',
-			'Cache-Control' : 'no-cache'
+			'Cache-Control': 'no-cache'
 		},
 		body: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
 		isBase64Encoded: true
@@ -43,38 +59,24 @@ module.exports.tracker = (event, context, callback) => {
 		}).reduce(
 			(a, b) => { a[b[0]] = b.slice(2).join('').replace(/^"(.*)"$/, '$1'); return a; }, {}
 			)
+	}
 
-	}
-	
-	function maybeDecrypt() {
-		if (process.env.COOKIE_NAME && process.env.SIGNATURE) {
-			return  kms.decrypt({
-  				CiphertextBlob: Buffer(process.env.SIGNATURE, 'base64')
-			}).promise() 
-		} else {
-			return Promise.resolve(); 
-		}
-	}
 
 	// optional processing of tracking cookie
-	var promise = maybeDecrypt(); 
-	
+	var promise = maybeDecrypt();
+
 	promise.then(res => {
 		console.info("Res", res)
 		if (res && res.Plaintext) {
 			const secret = String(res.Plaintext)
 			let tracking = requestData.cookies[process.env.COOKIE_NAME];
 			let splitted = tracking ? tracking.split('/') : undefined;
-			// function to determine if the cookie exists and is valid
-			function verify(segments, secret) {
-				return segments.length === 2 && (crypto.createHmac('sha256', secret).update(segments[0]).digest('hex')===segments[1]); 
-			}	
 			// verify the cookie
-			if (!(splitted && verify(splitted,secret))) {
+			if (!(splitted && verify(splitted, secret))) {
 				// add a tracking cookie
-				let uuid  = uuidv4();
+				let uuid = uuidv4();
 				let sign = crypto.createHmac('sha256', secret).update(uuid).digest('hex');
-				response.headers['Set-Cookie']=process.env.COOKIE_NAME + "=" + uuid + "/" + sign +"; path=/; HttpOnly; Secure; Max-Age=31536000";
+				response.headers['Set-Cookie'] = process.env.COOKIE_NAME + "=" + uuid + "/" + sign + "; path=/; HttpOnly; Secure; Max-Age=31536000";
 				requestData['uuid'] = uuid;
 			} else {
 				requestData['uuid'] = splitted[0];

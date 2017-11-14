@@ -1,0 +1,22 @@
+{
+  "name": "serverless-tracking-pixel",
+  "version": "1.0.0",
+  "description": "a tracking pixel implemented in the serverless framework",
+  "main": "handler.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alessandrobologna/serverless-tracking-pixel.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/alessandrobologna/serverless-tracking-pixel/issues"
+  },
+  "homepage": "https://github.com/alessandrobologna/serverless-tracking-pixel#readme",
+  "devDependencies": {
+    "serverless-apigw-binary": "^0.4.4"
+  }
+}

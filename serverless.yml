@@ -1,6 +1,3 @@
-service: 
-  name: serverless-tracking-pixel
-      
 provider:
   name: aws
   runtime: nodejs6.10
@@ -8,12 +5,22 @@ provider:
   region: us-east-1
   variableSyntax: "\\${{([\\s\\S]+?)}}" 
 
+service: 
+  name: ${{env:SERVICE}}
+
   iamRoleStatements:
     - Effect: "Allow"
       Action:
         - "firehose:PutRecord"
+      Resource:
+        - Fn::GetAtt:
+          - DeliveryStream
+          - Arn
+    - Effect: "Allow"
+      Action:
+        - "kms:decrypt"
       Resource: "*"
-
+        
 plugins:
  - serverless-apigw-binary
  
@@ -27,9 +34,10 @@ functions:
   tracker:
     handler: handler.tracker
     environment:
-      STREAM_NAME: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
       COOKIE_NAME: "${{env:COOKIE_NAME}}"
       SIGNATURE: "${{env:SIGNATURE}}"
+      STREAM_NAME: 
+        Ref: DeliveryStream
     events:
       - http:
           path: track.gif
@@ -63,14 +71,19 @@ resources:
         Description: "Encryption key for ${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
         KeyPolicy: 
           Version: "2012-10-17"
-          Id: "key-default-1"
+          Id: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
           Statement:
-          - Sid: Enable IAM User Permissions
-            Effect: Allow
+          - Effect: Allow
             Principal:
               AWS: 
                 Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
             Action: kms:*
+            Resource: '*'
+          - Effect: Allow
+            Principal:
+              AWS: 
+                Fn::GetAtt: [ IamRoleLambdaExecution, Arn]
+            Action: kms:decrypt
             Resource: '*'
 
     EncryptionKeyAlias:
@@ -84,17 +97,13 @@ resources:
       Type: "AWS::Elasticsearch::Domain"
       Properties:
         DomainName: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
-        ElasticsearchVersion: 5.3
+        ElasticsearchVersion: 5.5
         ElasticsearchClusterConfig: 
-          InstanceCount: "2"
-          ZoneAwarenessEnabled: "true"
+          InstanceCount: "1"
+          ZoneAwarenessEnabled: "false"
           InstanceType: "t2.small.elasticsearch"
-#          DedicatedMasterEnabled: "true"
-#          DedicatedMasterType: "t2.small.elasticsearch"
-#          DedicatedMasterCount: "3"
         EBSOptions: 
           EBSEnabled: true
-          Iops: 0
           VolumeSize: 20
           VolumeType: "gp2"
         SnapshotOptions: 
@@ -133,8 +142,7 @@ resources:
         AssumeRolePolicyDocument: 
           Version: "2012-10-17"
           Statement: 
-          - 
-            Effect: "Allow"
+          - Effect: "Allow"
             Principal: 
                 Service: 
                     - "firehose.amazonaws.com"
@@ -183,4 +191,4 @@ resources:
                   IntervalInSeconds: 300
                   SizeInMBs: 25
               CompressionFormat: "UNCOMPRESSED"
-              Prefix: "tracking/"              
+              Prefix: ${{env:PROJECT}}/${{env:STAGE}}/${{self:custom.name}}
