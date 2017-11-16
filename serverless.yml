@@ -1,13 +1,12 @@
+service: 
+  name: ${{env:SERVICE}}
+
 provider:
   name: aws
   runtime: nodejs6.10
   stage: dev
   region: us-east-1
   variableSyntax: "\\${{([\\s\\S]+?)}}" 
-
-service: 
-  name: ${{env:SERVICE}}
-
   iamRoleStatements:
     - Effect: "Allow"
       Action:
@@ -20,12 +19,12 @@ service:
       Action:
         - "kms:decrypt"
       Resource: "*"
-        
+
 plugins:
  - serverless-apigw-binary
- 
+
 custom:
-  name: web-tracking
+  name: ${{env:SERVICE}}
   apigwBinary:
     types:          
       - '*/*'
@@ -51,6 +50,10 @@ resources:
       Description: The FireHose Delivery Stream.
       Value: 
         Ref: 'DeliveryStream'
+    FirehoseBackupBucket:
+      Description: The FireHose Delivery backup S3 bucket.
+      Value: 
+        Ref: 'FirehoseBackupBucket'
     SearchClusterArn:
       Description: The ElasticSearch Service cluster ARN.
       Value: 
@@ -63,7 +66,11 @@ resources:
       Description: The KMS Service ARN.
       Value: 
         Fn::GetAtt: ['SearchCluster','DomainEndpoint']
-
+    EncryptionKeyAlias:
+      Description: The KMS Service Alias.
+      Value: 
+       Ref: 'EncryptionKeyAlias'
+  
   Resources:
     EncryptionKey: 
       Type: "AWS::KMS::Key"
@@ -114,7 +121,7 @@ resources:
     FirehoseBackupBucket:
       Type: "AWS::S3::Bucket"
       Properties: 
-        BucketName: "com.${{env:PROJECT}}.${{env:STAGE}}.${{self:custom.name}}"
+        BucketName: "${{env:PROJECT}}.${{env:STAGE}}.${{self:custom.name}}"
 
     LogGroup:
       Type: "AWS::Logs::LogGroup"

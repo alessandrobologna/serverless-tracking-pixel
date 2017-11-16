@@ -1,6 +1,8 @@
 'use strict';
 
-const AWS = require('aws-sdk');
+const AWSXRay = require('aws-xray-sdk-core');
+const AWS = AWSXRay.captureAWS(require('aws-sdk'));
+//const AWS = require('aws-sdk');
 const uuidv4 = require('uuid/v4');
 const crypto = require('crypto');
 const fh = new AWS.Firehose();
@@ -11,19 +13,38 @@ const verify = (segments, secret) => {
 	return segments.length === 2 && (crypto.createHmac('sha256', secret).update(segments[0]).digest('hex') === segments[1]);
 }
 
-const maybeDecrypt = () => {
-	if (process.env.COOKIE_NAME && process.env.SIGNATURE) {
+let secret = undefined
+
+const decrypt = () => {
+	if (!secret) {
 		return kms.decrypt({
 			CiphertextBlob: new Buffer(process.env.SIGNATURE, 'base64')
 		}).promise()
 	} else {
-		return Promise.resolve();
+		return Promise.resolve(secret);
 	}
+}
+
+const cookify = (res, requestData, response) => {
+	secret = String(res.Plaintext);
+	let tracking = requestData.cookies[process.env.COOKIE_NAME];
+	let splitted = tracking ? tracking.split('/') : undefined;
+	// verify the cookie
+	if (!(splitted && verify(splitted, secret))) {
+		// add a tracking cookie
+		let uuid = uuidv4();
+		let sign = crypto.createHmac('sha256', secret).update(uuid).digest('hex');
+		response.headers['Set-Cookie'] = process.env.COOKIE_NAME + "=" + uuid + "/" + sign + "; path=/; HttpOnly; Secure; Max-Age=31536000";
+		requestData['uuid'] = uuid;
+	}
+	else {
+		requestData['uuid'] = splitted[0];
+	}
+	delete requestData.cookies[process.env.COOKIE_NAME];
 }
 
 
 module.exports.tracker = (event, context, callback) => {
-	console.info("Event", event);
 	let response = {
 		statusCode: 200,
 		headers: {
@@ -33,25 +54,7 @@ module.exports.tracker = (event, context, callback) => {
 		body: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
 		isBase64Encoded: true
 	};
-	let requestData = {
-		ip: event.requestContext.identity.sourceIp,
-		path: event.requestContext.path,
-		referer: event.headers['Referer'],
-		agent: event.headers['User-Agent'],
-		accept: event.headers['Accept'],
-		language: event.headers['Accept-Language'],
-		encoding: event.headers['Accept-Encoding'],
-		country: event.headers['CloudFront-Viewer-Country'],
-		params: event.queryStringParameters,
-		cookies: {}
-	};
-	if (event.headers['CloudFront-Is-Desktop-Viewer']) {
-		requestData['device'] = 'desktop'
-	} else if (event.headers['CloudFront-Is-Mobile-Viewer']) {
-		requestData['device'] = 'mobile'
-	} else {
-		requestData['device'] = 'other'
-	}
+	let requestData = event;
 	// split cookie header
 	if (event.headers['Cookie']) {
 		requestData.cookies = event.headers['Cookie'].split(';').map((x) => {
@@ -61,43 +64,23 @@ module.exports.tracker = (event, context, callback) => {
 			)
 	}
 
-
-	// optional processing of tracking cookie
-	var promise = maybeDecrypt();
-
-	promise.then(res => {
-		console.info("Res", res)
-		if (res && res.Plaintext) {
-			const secret = String(res.Plaintext)
-			let tracking = requestData.cookies[process.env.COOKIE_NAME];
-			let splitted = tracking ? tracking.split('/') : undefined;
-			// verify the cookie
-			if (!(splitted && verify(splitted, secret))) {
-				// add a tracking cookie
-				let uuid = uuidv4();
-				let sign = crypto.createHmac('sha256', secret).update(uuid).digest('hex');
-				response.headers['Set-Cookie'] = process.env.COOKIE_NAME + "=" + uuid + "/" + sign + "; path=/; HttpOnly; Secure; Max-Age=31536000";
-				requestData['uuid'] = uuid;
-			} else {
-				requestData['uuid'] = splitted[0];
-			}
-			delete requestData.cookies[process.env.COOKIE_NAME];
-		}
+	decrypt().then(res => {
+		cookify(res, requestData, response);
 	}).catch(error => {
 		console.error("KMS error", error);
 	}).then(() => {
 		requestData['@timestamp'] = new Date().toISOString();
-		console.info("Firehose data", requestData);
 		fh.putRecord({
 			DeliveryStreamName: process.env.STREAM_NAME,
 			Record: { Data: JSON.stringify(requestData) }
 		}).promise().then(data => {
-			console.info("Firehose response", data);
 			if (data.RecordId) {
-				response.headers['RecordId'] = data.RecordId;
+				response.headers['X-RecordId'] = data.RecordId;
 			}
 		}).catch(error => {
 			console.error("Firehose error", error);
 		}).then(() => callback(null, response));
 	})
 };
+
+
