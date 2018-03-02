@@ -5,11 +5,12 @@ const AWS = AWSXRay.captureAWS(require('aws-sdk'));
 //const AWS = require('aws-sdk');
 const uuidv4 = require('uuid/v4');
 const crypto = require('crypto');
-const fh = new AWS.Firehose();
+const kinesis = new AWS.Kinesis();
 const kms = new AWS.KMS();
 
 // function to determine if the cookie exists and is valid
-const verify = (segments, secret) => {
+const verify = (cookie, secret) => {
+	let segments = cookie.split('/');
 	return segments.length === 2 && (crypto.createHmac('sha256', secret).update(segments[0]).digest('hex') === segments[1]);
 }
 
@@ -25,22 +26,26 @@ const decrypt = () => {
 	}
 }
 
+const setCookie = (response) => {
+	let uuid = uuidv4();
+	let sign = crypto.createHmac('sha256', secret).update(uuid).digest('hex');
+	response.headers['Set-Cookie'] = process.env.COOKIE_NAME + "=" + uuid + "/" + sign + "; path=/; HttpOnly; Secure; Max-Age=31536000";
+	return uuid;
+}
+
 const cookify = (res, requestData, response) => {
 	secret = String(res.Plaintext);
-	let tracking = requestData.cookies[process.env.COOKIE_NAME];
-	let splitted = tracking ? tracking.split('/') : undefined;
-	// verify the cookie
-	if (!(splitted && verify(splitted, secret))) {
-		// add a tracking cookie
-		let uuid = uuidv4();
-		let sign = crypto.createHmac('sha256', secret).update(uuid).digest('hex');
-		response.headers['Set-Cookie'] = process.env.COOKIE_NAME + "=" + uuid + "/" + sign + "; path=/; HttpOnly; Secure; Max-Age=31536000";
-		requestData['uuid'] = uuid;
+	if (requestData.cookies && requestData.cookies[process.env.COOKIE_NAME]) {
+		let cookie = requestData.cookies[process.env.COOKIE_NAME]; 
+		delete requestData.cookies[process.env.COOKIE_NAME];
+		if (!verify(cookie, secret)) {
+			return setCookie(response)
+		} else {
+			return cookie.split('/')[0] 
+		}
+	} else {
+		return setCookie(response)
 	}
-	else {
-		requestData['uuid'] = splitted[0];
-	}
-	delete requestData.cookies[process.env.COOKIE_NAME];
 }
 
 
@@ -62,25 +67,31 @@ module.exports.tracker = (event, context, callback) => {
 		}).reduce(
 			(a, b) => { a[b[0]] = b.slice(2).join('').replace(/^"(.*)"$/, '$1'); return a; }, {}
 			)
-	}
+	} 
 
+	let uuid = undefined;
 	decrypt().then(res => {
-		cookify(res, requestData, response);
+		uuid = cookify(res, requestData, response);
 	}).catch(error => {
 		console.error("KMS error", error);
 	}).then(() => {
 		requestData['@timestamp'] = new Date().toISOString();
-		fh.putRecord({
-			DeliveryStreamName: process.env.STREAM_NAME,
-			Record: { Data: JSON.stringify(requestData) }
+		requestData['uuid'] = uuid;
+		kinesis.putRecord({
+			Data: JSON.stringify(requestData),
+			PartitionKey: uuid,
+			StreamName: process.env.STREAM_NAME
 		}).promise().then(data => {
-			if (data.RecordId) {
-				response.headers['X-RecordId'] = data.RecordId;
+			console.log(data);
+			if (data.SequenceNumber) {
+				response.headers['X-SequenceNumber'] = data.SequenceNumber;
 			}
 		}).catch(error => {
-			console.error("Firehose error", error);
+			console.error("Kinesis error", error);
 		}).then(() => callback(null, response));
 	})
 };
+
+
 
 

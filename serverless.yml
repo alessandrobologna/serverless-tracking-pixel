@@ -4,16 +4,22 @@ service:
 provider:
   name: aws
   runtime: nodejs6.10
-  stage: dev
   region: us-east-1
   variableSyntax: "\\${{([\\s\\S]+?)}}" 
+  stage: ${{opt:stage, 'dev'}}
+  environment:
+    KINESIS_STREAM: ${{self:service}}-${{self:provider.stage}}-stream
+    KINESIS_FIREHOSE: ${{self:service}}-${{self:provider.stage}}-firehose
+    S3_BUCKET: ${{self:service}}-${{self:provider.stage}}-bucket
+    DYNAMO_TABLE: ${{self:service}}-${{self:provider.stage}}-table
+    ES_DOMAIN: ${{self:service}}-${{self:provider.stage}}-cluster
   iamRoleStatements:
     - Effect: "Allow"
       Action:
-        - "firehose:PutRecord"
+        - "kinesis:PutRecord"
       Resource:
         - Fn::GetAtt:
-          - DeliveryStream
+          - EventStream
           - Arn
     - Effect: "Allow"
       Action:
@@ -24,7 +30,6 @@ plugins:
  - serverless-apigw-binary
 
 custom:
-  name: ${{env:SERVICE}}
   apigwBinary:
     types:          
       - '*/*'
@@ -36,7 +41,7 @@ functions:
       COOKIE_NAME: "${{env:COOKIE_NAME}}"
       SIGNATURE: "${{env:SIGNATURE}}"
       STREAM_NAME: 
-        Ref: DeliveryStream
+        Ref: EventStream
     events:
       - http:
           path: track.gif
@@ -75,15 +80,15 @@ resources:
     EncryptionKey: 
       Type: "AWS::KMS::Key"
       Properties: 
-        Description: "Encryption key for ${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
+        Description: "Encryption key for ${{self:service}} (${{self:provider.stage}})"
         KeyPolicy: 
           Version: "2012-10-17"
-          Id: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
+          Id: ${{self:service}}-${{self:provider.stage}}
           Statement:
           - Effect: Allow
             Principal:
               AWS: 
-                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+                Fn::Sub: "arn:aws:iam::${AWS::AccountId}:root"
             Action: kms:*
             Resource: '*'
           - Effect: Allow
@@ -96,14 +101,14 @@ resources:
     EncryptionKeyAlias:
       Type: AWS::KMS::Alias
       Properties:
-        AliasName: alias/${{env:PROJECT}}-${{env:STAGE}}/${{self:custom.name}}
+        AliasName: alias/${{self:provider.stage}}/${{self:service}}
         TargetKeyId:
           Ref: EncryptionKey
 
     SearchCluster:
       Type: "AWS::Elasticsearch::Domain"
       Properties:
-        DomainName: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
+        DomainName: "${{self:provider.environment.ES_DOMAIN}}"
         ElasticsearchVersion: 5.5
         ElasticsearchClusterConfig: 
           InstanceCount: "1"
@@ -121,31 +126,37 @@ resources:
     FirehoseBackupBucket:
       Type: "AWS::S3::Bucket"
       Properties: 
-        BucketName: "${{env:PROJECT}}.${{env:STAGE}}.${{self:custom.name}}"
+        BucketName: "${{self:provider.environment.S3_BUCKET}}"
 
     LogGroup:
       Type: "AWS::Logs::LogGroup"
       Properties: 
-        LogGroupName: "/${{env:PROJECT}}/${{env:STAGE}}/${{self:custom.name}}"
+        LogGroupName: "/kinesis/${{self:service}}/${{self:provider.stage}}"
 
     S3LogStream:
       Type: "AWS::Logs::LogStream"
       Properties: 
         LogGroupName: 
           Ref: LogGroup
-        LogStreamName: s3
+        LogStreamName: "s3"
 
     ESLogStream:
       Type: "AWS::Logs::LogStream"
       Properties: 
         LogGroupName: 
           Ref: LogGroup
-        LogStreamName: es
+        LogStreamName: "es"
+
+    EventStream:
+      Type: AWS::Kinesis::Stream
+      Properties:
+        Name: ${{self:provider.environment.KINESIS_STREAM}}
+        ShardCount: 1
 
     DeliveryStreamRole:
       Type: "AWS::IAM::Role"
       Properties: 
-        RoleName: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
+        RoleName:  "${{self:provider.environment.KINESIS_FIREHOSE}}-role"
         AssumeRolePolicyDocument: 
           Version: "2012-10-17"
           Statement: 
@@ -159,12 +170,23 @@ resources:
           - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
           - "arn:aws:iam::aws:policy/AmazonESFullAccess" 
           - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess" 
+          - "arn:aws:iam::aws:policy/AmazonKinesisReadOnlyAccess"
 
     DeliveryStream:
         Type: "AWS::KinesisFirehose::DeliveryStream"
         DependsOn: SearchCluster
         Properties:
-          DeliveryStreamName: "${{env:PROJECT}}-${{env:STAGE}}-${{self:custom.name}}"
+          DeliveryStreamName: "${{self:provider.environment.KINESIS_FIREHOSE}}"
+          DeliveryStreamType: KinesisStreamAsSource
+          KinesisStreamSourceConfiguration: 
+              KinesisStreamARN: 
+                'Fn::GetAtt':
+                  - EventStream
+                  - Arn
+              RoleARN: 
+                'Fn::GetAtt':
+                  - DeliveryStreamRole
+                  - Arn
           ElasticsearchDestinationConfiguration:
             CloudWatchLoggingOptions:
               Enabled: true
@@ -176,7 +198,7 @@ resources:
               SizeInMBs: 5
             DomainARN: 
               Fn::GetAtt:  [SearchCluster,DomainArn]
-            IndexName: ${{self:custom.name}}
+            IndexName: ${{self:service}}
             IndexRotationPeriod: "OneDay"
             RetryOptions:
               DurationInSeconds: 60
@@ -198,4 +220,4 @@ resources:
                   IntervalInSeconds: 300
                   SizeInMBs: 25
               CompressionFormat: "UNCOMPRESSED"
-              Prefix: ${{env:PROJECT}}/${{env:STAGE}}/${{self:custom.name}}
+              Prefix: ${{self:provider.stage}}/${{self:service}}
